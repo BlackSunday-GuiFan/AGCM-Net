@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# data & weights (not shipped)
+data/
+models/__data__/
+*.pt
+*.pth
+*.pdparams
+*.onnx
+*.engine
+
+# experiments
+work_dirs/
+results/
+tmp/
+
+# editor / os
+.vscode/
+.idea/
+.DS_Store

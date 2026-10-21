@@ -1,0 +1,12 @@
+# Core runtime (required)
+numpy>=1.21
+opencv-python>=4.5
+torch>=1.13
+ultralytics>=8.3.0
+
+# Evaluation
+pycocotools>=2.0
+scipy>=1.7
+
+# Packaging
+setuptools
