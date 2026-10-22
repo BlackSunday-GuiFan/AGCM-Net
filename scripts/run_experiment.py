@@ -39,7 +39,7 @@ DETECTORS = {
 
 # dataset protocol registry: {name: (cat_ids, n_cls)}
 PROTOCOLS = {
-    'default': ((1, 2, 3, 4, 5), 5),
+    'default': ((0, 1, 2, 3, 4), 5),
     'visdrone': (tuple(range(1, 11)), 10),
     'maris': ((1, 2, 3), 3),
 }
@@ -93,6 +93,8 @@ def main():
     import torch
     device = f'cuda:{args.gpu}' if torch.cuda.is_available() else 'cpu'
     cat_ids, n_cls = PROTOCOLS[args.protocol]
+    # model classes are 0-based; GT category ids may start at 1 (COCO) or 0
+    cls_offset = min(cat_ids) if cat_ids else 0
 
     img_dir = Path(args.img_dir)
     coco_path = str(args.coco)
@@ -164,7 +166,7 @@ def main():
 
         for b in boxes:
             preds.append({'image_id': img_id,
-                          'category_id': int(b['class']) + 1,
+                          'category_id': int(b['class']) + cls_offset,
                           'bbox': [round(v, 2) for v in b['bbox']],
                           'score': round(b['confidence'], 4)})
         for k, v in timer.items():
@@ -175,7 +177,8 @@ def main():
 
     # ------------------------------------------------------------------
     met = evaluate_coco(preds, coco_path, cat_ids=cat_ids,
-                        max_dets=(100, 300, 1000))
+                        max_dets=(100, 300, 1000),
+                        subset_ids=ids)
     result = {'det': args.det, 'mode': args.mode,
               'n_imgs': len(ids), 'n_pred': len(preds),
               'total_s': round(total, 2),

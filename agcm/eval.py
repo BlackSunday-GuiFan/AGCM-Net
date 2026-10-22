@@ -36,6 +36,10 @@ def evaluate_coco(preds: List[dict], coco_path: str,
     from pycocotools.coco import COCO
     from pycocotools.cocoeval import COCOeval
     coco_gt = COCO(str(coco_path))
+    # some datasets (e.g. SeaDronesSee V2) omit 'iscrowd' in GT annotations
+    if coco_gt.dataset.get('annotations') and 'iscrowd' not in coco_gt.dataset['annotations'][0]:
+        for ann in coco_gt.dataset['annotations']:
+            ann['iscrowd'] = 0
     if not preds:
         return EvalMetrics(n_pred=0)
     coco_dt = coco_gt.loadRes(preds)
