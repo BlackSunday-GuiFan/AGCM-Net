@@ -17,6 +17,11 @@ Cascade per row (all tile rows use the yolo12n_tile detector):
 APO direction rule (user-confirmed D1): a tile expands toward side(s) where
 the NEIGHBORING GRID TILE was GF-accepted (signal side). Merged CCM regions
 and every accepted tile are ALL sent to batch detection (not either/or).
+
+cfg.apo_mode selects the expansion driver: 'neighbor' (D1 rule; the behaviour
+of has-only gates), 'cut' (multi-cut gate cut heads only), 'mix' (cut head
+fires OR neighbour accepted), 'auto' (= mix when a multi-cut gate is loaded,
+else neighbor).
 """
 from __future__ import annotations
 
@@ -542,7 +547,8 @@ class AGCMPipeline:
         # ---- GF: accept or accept-all ----
         if self.use_gf:
             accepted, _, _ = self.gate.filter_tiles(
-                img, tiles, fast=True, thr=gate_thr, timer=timer)
+                img, tiles, fast=True, thr=gate_thr, timer=timer,
+                tile_hw=(self._tw, self._th))
         else:
             accepted = tiles                          # GF off: all accepted
         acc_set = set(accepted)
@@ -565,10 +571,23 @@ class AGCMPipeline:
                 timer['cc'] = time.time() - t_cc
 
         # ---- every accepted tile -> APO expansion or plain ----
+        apo_mode = self.cfg.apo_mode
+        if apo_mode == 'auto':      # hybrid expansion with multi-cut gates
+            apo_mode = 'mix' if getattr(self.gate, 'multi_cut', False) \
+                else 'neighbor'
+        cuts = getattr(self.gate, 'cuts', None) or {}
         for tx, ty in accepted:
             if self.use_apo:
-                crop, cx1, cy1 = self._apo_crop(img, tx, ty, acc_set, H, W,
-                                                self._tw, self._th)
+                if apo_mode == 'mix':
+                    crop, cx1, cy1 = self._apo_crop_mix(
+                        img, tx, ty, cuts, acc_set, H, W,
+                        self._tw, self._th)
+                elif apo_mode == 'cut':
+                    crop, cx1, cy1 = self._apo_crop_cut(
+                        img, tx, ty, cuts, H, W, self._tw, self._th)
+                else:
+                    crop, cx1, cy1 = self._apo_crop(
+                        img, tx, ty, acc_set, H, W, self._tw, self._th)
             else:
                 crop, cx1, cy1 = self._tile_crop(img, tx, ty, H, W,
                                                  self._tw, self._th)

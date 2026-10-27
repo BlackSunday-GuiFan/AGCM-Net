@@ -127,25 +127,33 @@ class GateFilter:
             self.net = build_net(n_out)
         self.net.load_state_dict(sd)
         self.net.eval().to(device)
+        self.n_out = n_out
         self.multi_cut = n_out == 5
         self.cuts = None                   # filled by filter_tiles()
         self.mean = torch.tensor(cfg.gate_mean).view(1, 3, 1, 1).to(device)
         self.std = torch.tensor(cfg.gate_std).view(1, 3, 1, 1).to(device)
 
     # ------------------------------------------------------------------
-    def _patch(self, img: np.ndarray, tx: int, ty: int) -> np.ndarray:
-        """224x224 gate patch at (tx,ty), BGR -> RGB float normalized."""
-        c = img[ty:ty + self.cfg.tile, tx:tx + self.cfg.tile]
+    def _patch(self, img: np.ndarray, tx: int, ty: int,
+               tw: int | None = None, th: int | None = None) -> np.ndarray:
+        """gate_size x gate_size patch over the ACTUAL tile region
+        (tw x th; adaptive grids may differ from cfg.tile), BGR,
+        unnormalized."""
+        tw = tw or self.cfg.tile
+        th = th or self.cfg.tile
+        c = img[ty:ty + th, tx:tx + tw]
         c = cv2.resize(c, (self.cfg.gate_size, self.cfg.gate_size),
                        interpolation=cv2.INTER_AREA)
         return c
 
-    def _score_naive(self, img, tiles, timer=None):
-        """v1: per-tile resize, one batched forward. Returns (N, C) sigmoid."""
+    def _score_naive(self, img, tiles, timer=None, tile_hw=None):
+        """v1: per-tile resize, one batched forward. Returns (N, C) sigmoid.
+        tile_hw=(tw,th): extract patches over the actual adaptive tile."""
         if not tiles:
-            return np.zeros((0, self.net[-1].out_features))
+            return np.zeros((0, self.n_out))
+        tw, th = tile_hw or (None, None)
         t0 = time.time()
-        crops = [self._patch(img, tx, ty) for tx, ty in tiles]
+        crops = [self._patch(img, tx, ty, tw, th) for tx, ty in tiles]
         x = torch.from_numpy(np.stack(crops)[..., ::-1].copy()) \
             .permute(0, 3, 1, 2).float().div_(255.).to(self.dev)
         x = (x - self.mean) / self.std
@@ -158,13 +166,18 @@ class GateFilter:
             timer['gate_inf'] += time.time() - t0
         return torch.sigmoid(logits).float().cpu().numpy()
 
-    def score_tiles_naive(self, img, tiles, timer=None):
+    def score_tiles_naive(self, img, tiles, timer=None, tile_hw=None):
         """v1: per-tile resize, one batched forward (has score, 1-D)."""
-        return self._score_naive(img, tiles, timer)[:, 0].tolist()
+        return self._score_naive(img, tiles, timer, tile_hw)[:, 0].tolist()
 
-    def _score_fast(self, img, tiles, timer=None):
-        """v3 body: downscale whole image once (224/TILE), slice patches on
-        GPU. Returns (N, C) sigmoid.
+    def _score_fast(self, img, tiles, timer=None, tile_hw=None):
+        """v3 body: downscale whole image once (gate_size / actual tile),
+        slice patches on GPU. Returns (N, C) sigmoid.
+
+        tile_hw=(tw,th) is the ACTUAL adaptive grid step; downscale and
+        window offsets follow it so each patch covers exactly its tile
+        (a fixed cfg.tile window silently missed the bottom/right strips
+        whenever the adaptive tile exceeded 640 px).
 
         Downscale runs with F.interpolate on the GPU (torch bilinear) instead
         of cv2.resize on the CPU: verified decision-identical (interp vs
@@ -173,15 +186,17 @@ class GateFilter:
         -> GPU is a single ~2ms transfer; slicing is zero-copy views.
         """
         if not tiles:
-            return np.zeros((0, self.net[-1].out_features))
+            return np.zeros((0, self.n_out))
         import torch.nn.functional as F
+        tw, th = tile_hw or (self.cfg.tile, self.cfg.tile)
         H, W = img.shape[:2]
-        scale = self.cfg.gate_size / self.cfg.tile
+        scale_x = self.cfg.gate_size / tw
+        scale_y = self.cfg.gate_size / th
         t0 = time.time()
-        sh = max(1, int(round(H * scale)))
-        sw = max(1, int(round(W * scale)))
+        sh = max(1, int(round(H * scale_y)))
+        sw = max(1, int(round(W * scale_x)))
         if sh < self.cfg.gate_size or sw < self.cfg.gate_size:
-            return self._score_naive(img, tiles, timer)      # fallback
+            return self._score_naive(img, tiles, timer, tile_hw)  # fallback
         x = torch.from_numpy(np.ascontiguousarray(img)).to(self.dev)  # H,W,3
         x = x.permute(2, 0, 1)[None].float().div_(255.)               # 1,3,H,W
         small = F.interpolate(x, size=(sh, sw), mode='bilinear',
@@ -190,8 +205,8 @@ class GateFilter:
         small = (small - self.mean) / self.std
         windows = []
         for tx, ty in tiles:
-            sx = min(int(round(tx * scale)), sw - self.cfg.gate_size)
-            sy = min(int(round(ty * scale)), sh - self.cfg.gate_size)
+            sx = min(int(round(tx * scale_x)), sw - self.cfg.gate_size)
+            sy = min(int(round(ty * scale_y)), sh - self.cfg.gate_size)
             windows.append(small[:, :, sy:sy + self.cfg.gate_size,
                              sx:sx + self.cfg.gate_size])
         xt = torch.cat(windows, dim=0)
@@ -204,26 +219,32 @@ class GateFilter:
             timer['gate_inf'] += time.time() - t0
         return torch.sigmoid(logits).float().cpu().numpy()
 
-    def score_tiles_fast(self, img, tiles, timer=None):
+    def score_tiles_fast(self, img, tiles, timer=None, tile_hw=None):
         """v3: whole-image downscale, GPU patches (has score, 1-D)."""
-        return self._score_fast(img, tiles, timer)[:, 0].tolist()
+        return self._score_fast(img, tiles, timer, tile_hw)[:, 0].tolist()
 
-    def score_tiles_full(self, img, tiles, fast=True, timer=None):
+    def score_tiles_full(self, img, tiles, fast=True, timer=None,
+                         tile_hw=None):
         """Full (N, C) sigmoid rows: [has, cut_l, cut_r, cut_t, cut_b]
         for multi-cut gates (C=1 for the original has-only gate)."""
         fn = self._score_fast if fast else self._score_naive
-        return fn(img, tiles, timer)
+        return fn(img, tiles, timer, tile_hw)
 
     # ------------------------------------------------------------------
-    def filter_tiles(self, img, tiles, fast=True, thr=None, timer=None):
+    def filter_tiles(self, img, tiles, fast=True, thr=None, timer=None,
+                     tile_hw=None):
         """Score tiles and return (accepted[(tx,ty)...], has_scores, rate).
+
+        tile_hw=(tw,th): actual adaptive grid step, so each gate patch covers
+        exactly its tile region (a fixed cfg.tile window mismatched adaptive
+        grids: strips beyond 640 px were never gated).
 
         For multi-cut gates also fills self.cuts = {(tx,ty): [cut_l, cut_r,
         cut_t, cut_b]} (sigmoid probs) so the caller can expand APO on the
         exact borders that truncate a target.
         """
         thr = self.cfg.thr if thr is None else thr
-        full = self.score_tiles_full(img, tiles, fast, timer)   # (N, C)
+        full = self.score_tiles_full(img, tiles, fast, timer, tile_hw)
         has_scores = full[:, 0].tolist()
         accepted = [(tx, ty) for (tx, ty), s in zip(tiles, has_scores)
                     if s >= thr]

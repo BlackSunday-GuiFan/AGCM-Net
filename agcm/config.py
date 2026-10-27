@@ -42,6 +42,11 @@ class AGCMConfig:
     expand: float = 0.2             # APO one-sided expansion (fraction of tile)
     cut_thr: float = 0.5            # multi-cut gate: border-cut probability
                                     # threshold to expand APO on that side
+    apo_mode: str = 'auto'          # APO expansion driver: 'neighbor' (D1
+                                    # neighbour rule) | 'cut' (multi-cut gate
+                                    # cut heads) | 'mix' (cut OR neighbour) |
+                                    # 'auto' (= mix with a multi-cut gate,
+                                    # else neighbor)
 
     # --- detection ---
     det_imsz: int = 640

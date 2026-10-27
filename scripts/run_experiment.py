@@ -74,8 +74,18 @@ def main():
     ap.add_argument('--protocol', choices=list(PROTOCOLS), default='default')
     ap.add_argument('--thr', type=float, default=0.5, help='gate threshold')
     ap.add_argument('--tile', type=int, default=640)
-    ap.add_argument('--overlap', type=float, default=0.0,
-                    help='base-grid overlap ratio (SAHI uses 0.2)')
+    ap.add_argument('--overlap', type=float, default=None,
+                    help='base-grid overlap ratio (default: 0.2 for SAHI, '
+                         '0.0 otherwise)')
+    ap.add_argument('--ablate', choices=['none', 'gf', 'ccm', 'apo'],
+                    default='none',
+                    help='ablate one AGCM component (mode=agcm only): '
+                         'gf=all tiles accepted, ccm=no merged regions, '
+                         'apo=plain tiles')
+    ap.add_argument('--apo-mode', choices=['auto', 'neighbor', 'cut', 'mix'],
+                    default='auto',
+                    help='APO expansion driver (auto: hybrid cut|neighbour '
+                         'when a multi-cut gate is loaded)')
     ap.add_argument('--limit', type=int, default=0)
     ap.add_argument('--gpu', type=int, default=0)
     ap.add_argument('--nms-iou', type=float, default=None)
@@ -88,7 +98,8 @@ def main():
                     help='decode all images to RAM first (excludes I/O)')
     ap.add_argument('--out', default='results/agcm_eval.json')
     args = ap.parse_args()
-    ap.set_defaults()
+    if args.overlap is None:
+        args.overlap = 0.2 if args.mode == 'sahi' else 0.0
 
     import torch
     device = f'cuda:{args.gpu}' if torch.cuda.is_available() else 'cpu'
@@ -108,7 +119,8 @@ def main():
     if args.limit:
         ids = ids[:args.limit]
     print(f'eval {len(ids)} imgs | protocol={args.protocol} '
-          f'catIds={cat_ids} | mode={args.mode}', flush=True)
+          f'catIds={cat_ids} | mode={args.mode} | overlap={args.overlap} '
+          f'| ablate={args.ablate} | apo_mode={args.apo_mode}', flush=True)
 
     # ------------------------------------------------------------------
     cfg = AGCMConfig()
@@ -118,6 +130,7 @@ def main():
     cfg.n_cls = n_cls
     cfg.cat_ids = cat_ids
     cfg.postprocess = args.postprocess
+    cfg.apo_mode = args.apo_mode
     if args.nms_iou is not None:
         cfg.nms_iou = args.nms_iou
     cfg.fuse_large = args.fuse_large
@@ -126,6 +139,14 @@ def main():
 
     det = build_det(args.det, args.imsz, args.conf, device,
                     weights=args.weights)
+    if getattr(det, 'conf', None) is not None and det.conf <= 0.01 and (
+            cfg.postprocess == 'nmm'
+            or (cfg.fuse_large and cfg.fuse_mode == 'union')):
+        print('WARNING: union merging (GREEDYNMM) at conf<=0.01 collapses '
+              'mAP: low-confidence boxes union into high-confidence tight '
+              'boxes (observed SDS mAP75 0.55 -> ~0.10 at conf=0.001). '
+              'Keep postprocess=nms unless you re-tuned the protocol.',
+              flush=True)
     gate = None
     if args.mode in ('agcm', 'sahi'):
         gw = args.gate or (MODELS_ROOT / 'gate' / 'gate-customtiny-224.pth')
@@ -157,9 +178,14 @@ def main():
             boxes = (boxes if not args.fuse_large
                      else _fuse(boxes, cfg))
         else:
-            pipe = AGCMPipeline(gate, det, cfg, use_gf=args.mode == 'agcm',
-                                use_ccm=args.mode == 'agcm',
-                                use_apo=args.mode == 'agcm',
+            if args.mode == 'agcm':
+                use_gf = args.ablate != 'gf'
+                use_ccm = args.ablate != 'ccm'
+                use_apo = args.ablate != 'apo'
+            else:
+                use_gf = use_ccm = use_apo = False
+            pipe = AGCMPipeline(gate, det, cfg, use_gf=use_gf,
+                                use_ccm=use_ccm, use_apo=use_apo,
                                 overlap=args.overlap,
                                 full_img=(args.mode == 'sahi'))
             boxes = pipe(img, timer=timer, gate_thr=args.thr)
