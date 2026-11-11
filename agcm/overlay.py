@@ -67,7 +67,7 @@ def int_grid(W: int, H: int, tw: int, th: int) -> List[Pos]:
     plain stride grid covers the image edge (clipped by the crop). It must
     NOT add edge-aligned duplicates: those sit 1-7 px away from the regular
     grid line and (a) re-detect the same edge strip and (b) break CCM
-    4-connectivity (neighbours are detected by an exact +/-tw/th offset),
+    8-connectivity (neighbours, including the diagonals, are detected by an exact +/-tw/th offset),
     splitting fully-accepted scenes into many components."""
     tiles = []
     for y0 in range(0, H, th):

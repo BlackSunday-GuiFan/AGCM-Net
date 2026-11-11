@@ -21,10 +21,15 @@ The expected locations are resolved from `AGCM_MODELS_ROOT`
 
 ### Gate (CustomTiny, 224 input)
 
+`CustomTiny` is the name used in `agcm/gate.py`; the paper calls this gate
+**TinyVGG** (0.39 M parameters, 0.23 ms/tile). Both refer to the same 5-conv
+VGG-style gate used in all reported experiments.
+
 Train a binary per-tile gate that predicts whether a 640×640 tile contains any
 target. Input patches are 224×224 resized tiles; label = 1 if the tile has any
-GT box. See the gate training scripts in `scripts/` (BCEWithLogits + pos_weight,
-input normalization ImageNet stats).
+GT box. The architecture is `build_net()` in `agcm/gate.py` (BCEWithLogits +
+pos_weight, ImageNet normalization). Gate and detector training scripts will be
+released upon publication, as stated in the paper's data-availability statement.
 
 ### Detector (YOLOv12n, tile 640)
 

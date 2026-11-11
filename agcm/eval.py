@@ -1,7 +1,9 @@
 """COCO official evaluation + throughput measurement.
 
-Mirrors the project-wide protocol: catIds=[1..5], maxDets=[100,300,1000],
-conf=0.001. EvalMetrics computes mAP50-95/50/75 and area-split APs.
+Mirrors the project-wide protocol: maxDets=[100,300,1000], conf=0.001,
+and dataset-specific category ids from the PROTOCOLS registry in
+scripts/run_experiment.py. EvalMetrics computes mAP50-95/50/75 and
+area-split APs.
 """
 from __future__ import annotations
 

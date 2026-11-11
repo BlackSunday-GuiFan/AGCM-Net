@@ -1,6 +1,6 @@
 """CCM - Connected-Component Merging.
 
-Groups spatially-adjacent accepted grid tiles (4-connectivity) into regions,
+Groups spatially-adjacent accepted grid tiles (8-connectivity) into regions,
 then builds detection crops:
   - singleton component  -> the tile crop itself (for small targets)
   - multi-tile component -> ONE merged bounding crop covering the whole
@@ -35,10 +35,11 @@ class ConnectedComponentMerger:
                    th: int | None = None):
         """Return list of components; each component is a list of (tx, ty).
 
-        With tw/th (actual grid step) real-coordinate 4-connectivity is used:
-        two accepted tiles merge only when their grid distance is exactly
-        one step (tx diff == tw or ty diff == th), so tiles separated by a
-        rejected tile are NOT merged. Without tw/th (legacy callers) the
+        With tw/th (actual grid step) real-coordinate 8-connectivity is used:
+        two accepted tiles merge when they touch on an edge or a corner
+        (8-neighbourhood: the four orthogonal steps tx±tw, ty±th and the
+        four diagonal steps tx±tw, ty±th); two accepted tiles are merged
+        whenever they are adjacent. Without tw/th (legacy callers) the
         old sorted-index adjacency is kept.
         """
         if not accepted:
@@ -60,7 +61,9 @@ class ConnectedComponentMerger:
 
             for (tx, ty) in accepted:
                 for (nx, ny) in ((tx - tw, ty), (tx + tw, ty),
-                                 (tx, ty - th), (tx, ty + th)):
+                                 (tx, ty - th), (tx, ty + th),
+                                 (tx - tw, ty - th), (tx + tw, ty - th),
+                                 (tx - tw, ty + th), (tx + tw, ty + th)):
                     if (nx, ny) in acc:
                         union((tx, ty), (nx, ny))
             comps = {}
@@ -74,9 +77,9 @@ class ConnectedComponentMerger:
         mask = np.zeros((len(cy), len(cx)), dtype=bool)
         for tx, ty in accepted:
             mask[yi[ty], xi[tx]] = True
-        lab, _ = ndimage.label(mask, structure=np.array([[0, 1, 0],
+        lab, _ = ndimage.label(mask, structure=np.array([[1, 1, 1],
                                                          [1, 1, 1],
-                                                         [0, 1, 0]]))
+                                                         [1, 1, 1]]))
         comp_of = {(tx, ty): int(lab[yi[ty], xi[tx]]) for tx, ty in accepted}
         comps = defaultdict(list)
         for (tx, ty) in accepted:
